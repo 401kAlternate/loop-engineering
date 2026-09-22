@@ -1,105 +1,92 @@
-"""Browser UI for the COBOL-style transaction regression loop."""
+"""Practice console for learning loop engineering with a COBOL-style emulator."""
 from __future__ import annotations
-
-import tempfile
-from pathlib import Path
 
 import streamlit as st
 
-from loop_engineering.batch import parse_line, summarize
+from loop_engineering.emulator import EmulatorState, new_state, run_all, step
 
 
-ROOT = Path(__file__).parent
-SAMPLE_INPUT = ROOT / "examples/transactions/input.dat"
-SAMPLE_GOLDEN = ROOT / "examples/transactions/expected.out"
+SCENARIOS = {
+    "Healthy nightly batch": {
+        "brief": "Run the baseline, inspect each phase, and explain why the result is safe to release.",
+        "records": ["ACCT0000010000000125", "ACCT0000020000000300", "ACCT0000030000000075"],
+        "hint": "Start with STEP and watch READ → VALIDATE → ACCUMULATE → WRITE → CLOSE.",
+    },
+    "Malformed production record": {
+        "brief": "A nightly job fails. Find the bad record and explain the operational response.",
+        "records": ["ACCT0000010000000125", "ACCT000002      BAD", "ACCT0000030000000075"],
+        "hint": "Use STEP until VALIDATE fails. Inspect the current record and the error log.",
+    },
+    "Copybook mismatch": {
+        "brief": "A partner sends a record with the wrong layout. Identify the interface contract problem.",
+        "records": ["ACCT0000010000000125", "ACCT000002000000030", "ACCT0000030000000075"],
+        "hint": "The record layout is fixed-width: 10 characters for account plus 10 digits for cents.",
+    },
+}
 
 
-st.set_page_config(page_title="Loop Engineering", page_icon="🔁", layout="centered")
-st.title("🔁 Loop Engineering")
-st.caption("A browser-based COBOL-style batch validation loop")
+st.set_page_config(page_title="Loop Engineering Lab", page_icon="🔁", layout="wide")
+st.title("🔁 Loop Engineering Lab")
+st.caption("Learn by observing, changing, testing, and operating a COBOL-style batch system.")
 
-st.markdown(
-    "Upload a fixed-width transaction file, validate its records, generate a summary, "
-    "and optionally compare it with a golden output file."
-)
+scenario_name = st.sidebar.selectbox("Practice scenario", list(SCENARIOS))
+scenario = SCENARIOS[scenario_name]
+if st.session_state.get("scenario") != scenario_name:
+    st.session_state.scenario = scenario_name
+    st.session_state.emulator = new_state(scenario["records"])
 
-uploaded_input = st.file_uploader("Transaction input file", type=["dat", "txt"])
-use_sample = st.checkbox("Use the included sample transaction file", value=uploaded_input is None)
+state: EmulatorState = st.session_state.emulator
 
-if uploaded_input is not None and not use_sample:
-    input_name = uploaded_input.name
-    input_bytes = uploaded_input.getvalue()
-elif use_sample:
-    input_name = "examples/transactions/input.dat"
-    input_bytes = SAMPLE_INPUT.read_bytes()
-else:
-    input_name = ""
-    input_bytes = b""
+st.info(f"**Mission:** {scenario['brief']}  \n**Hint:** {scenario['hint']}")
 
-if input_bytes:
-    try:
-        input_text = input_bytes.decode("utf-8")
-    except UnicodeDecodeError:
-        st.error("The input file must be UTF-8 text.")
-        st.stop()
+controls = st.columns(4)
+if controls[0].button("STEP", type="primary", use_container_width=True):
+    step(state)
+if controls[1].button("RUN ALL", use_container_width=True):
+    run_all(state)
+if controls[2].button("RESET", use_container_width=True):
+    st.session_state.emulator = new_state(scenario["records"])
+    state = st.session_state.emulator
+if controls[3].button("NEW SCENARIO", use_container_width=True):
+    st.session_state.scenario = scenario_name
+    st.session_state.emulator = new_state(scenario["records"])
+    state = st.session_state.emulator
 
-    st.subheader("Input preview")
-    st.code(input_text, language="text")
+left, right = st.columns(2)
+with left:
+    st.subheader("Virtual mainframe")
+    st.write(f"Job status: **{state.status}**")
+    metrics = st.columns(3)
+    metrics[0].metric("Last step", state.last_step or "—")
+    metrics[1].metric("Record", f"{state.cursor}/{len(state.records)}")
+    metrics[2].metric("Total cents", state.total_cents)
 
-    errors: list[str] = []
-    records = input_text.splitlines()
-    for number, line in enumerate(records, start=1):
-        try:
-            parse_line(line, number)
-        except ValueError as error:
-            errors.append(str(error))
+    st.markdown("**Input file: TRANSACTION-FILE**")
+    for number, record in enumerate(state.records, start=1):
+        marker = "▶" if number == state.cursor and state.current else " "
+        st.code(f"{marker} {number:02d} | {record}", language="text")
 
-    if errors:
-        st.error(f"Validation failed: {len(errors)} invalid record(s)")
-        for error in errors:
-            st.write(f"- {error}")
-    else:
-        with tempfile.TemporaryDirectory() as directory:
-            input_path = Path(directory) / input_name.split("/")[-1]
-            output_path = Path(directory) / "summary.out"
-            input_path.write_text(input_text)
-            result = summarize(input_path)
+    st.markdown("**Working storage**")
+    st.code(
+        f"CURRENT-RECORD: {state.current or '(none)'}\n"
+        f"TRANSACTION-COUNT: {state.count:010d}\n"
+        f"TOTAL-CENTS: {state.total_cents:010d}",
+        language="text",
+    )
 
-        count = len(records)
-        total_cents = sum(int(line[10:]) for line in records)
-        first, second = result.rstrip().splitlines()
-        st.subheader("Batch result")
-        metric_one, metric_two = st.columns(2)
-        metric_one.metric("Transactions", count)
-        metric_two.metric("Total", f"${total_cents / 100:,.2f}")
-        st.code(result, language="text")
-        st.download_button(
-            "Download generated output",
-            data=result,
-            file_name="transaction-summary.out",
-            mime="text/plain",
-        )
+with right:
+    st.subheader("Execution trace")
+    st.code("\n".join(state.log), language="text")
+    if state.error:
+        st.error(f"Job failed: {state.error}")
+    elif state.status == "COMPLETE":
+        st.success("Job complete. Inspect the trace, then explain what you would monitor in production.")
 
-        golden_file = st.file_uploader("Optional golden output file", type=["out", "txt"])
-        if golden_file is None and use_sample:
-            expected = SAMPLE_GOLDEN.read_text()
-            golden_name = "examples/transactions/expected.out"
-        elif golden_file is not None:
-            expected = golden_file.getvalue().decode("utf-8")
-            golden_name = golden_file.name
-        else:
-            expected = None
-            golden_name = ""
-
-        if expected is not None:
-            if result == expected:
-                st.success(f"PASS: output matches {golden_name}")
-            else:
-                st.error(f"FAIL: output differs from {golden_name}")
-                with st.expander("Expected output"):
-                    st.code(expected, language="text")
-else:
-    st.info("Choose the sample file or upload a transaction file to begin.")
+    st.subheader("Output spool")
+    st.code("\n".join(state.output) or "(nothing written yet)", language="text")
 
 st.divider()
-st.caption("Record format: 10-character account followed by a 10-digit amount in cents.")
+st.markdown(
+    "**The loop:** observe the trace → understand the data layout → make one safe change → "
+    "run again → verify the output → document what you learned."
+)
