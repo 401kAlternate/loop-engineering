@@ -1,0 +1,9 @@
+[project]
+name = "loop-engineering"
+version = "0.1.0"
+description = "A COBOL-oriented feedback loop for safe batch changes"
+requires-python = ">=3.10"
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
