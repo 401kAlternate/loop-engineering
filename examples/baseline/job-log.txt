@@ -1,0 +1,16 @@
+JOB START: TRANSACTION-SUMMARY
+STEP: READ
+READ: record 1 loaded
+VALIDATE: record 1 accepted
+ACCUMULATE: count=1, total=125
+READ: record 2 loaded
+VALIDATE: record 2 accepted
+ACCUMULATE: count=2, total=425
+READ: record 3 loaded
+VALIDATE: record 3 accepted
+ACCUMULATE: count=3, total=500
+READ: record 4 loaded
+VALIDATE: record 4 accepted
+ACCUMULATE: count=4, total=600
+WRITE: summary refreshed
+JOB END: SUCCESS
